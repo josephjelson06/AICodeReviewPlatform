@@ -14,12 +14,13 @@ const groq = createGroq({
 const ollama = createOpenAI({
     baseURL: process.env.OLLAMA_BASE_URL || "http://localhost:11434/v1",
     apiKey: "ollama",
-    compatibility: "compatible",
     name: "ollama",
 });
 
 export function getModel() {
-    const provider = process.env.AI_PROVIDER || "openai";
+    const isProduction = process.env.NODE_ENV === "production";
+    // In production, force Groq (free cloud) unless explicitly overridden
+    const provider = isProduction ? "groq" : (process.env.AI_PROVIDER || "openai");
 
     switch (provider) {
         case "ollama":

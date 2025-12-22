@@ -184,13 +184,17 @@ export class AnalysisService {
             const userPrompt = `File: ${filePath}\n\nCode:\n${content}`;
 
             let rawText = "";
+            const isProduction = process.env.NODE_ENV === "production";
+            // Check if we specifically want Ollama manual fetch (Local Env)
+            // If in production, even if AI_PROVIDER is "ollama", force Groq SDK (handled in getModel, but we must skip this block)
+            const useManualOllama = !isProduction && process.env.AI_PROVIDER === "ollama";
 
-            if (process.env.AI_PROVIDER === "ollama") {
+            if (useManualOllama) {
                 // Use manual fetcher for Ollama
                 const { generateOllamaResponse } = await import("./ai-provider");
                 rawText = await generateOllamaResponse(systemPrompt, userPrompt);
             } else {
-                // Use SDK for others
+                // Use SDK for others (Groq/OpenAI) + Production
                 const { text } = await generateText({
                     model: getModel(),
                     system: systemPrompt,
