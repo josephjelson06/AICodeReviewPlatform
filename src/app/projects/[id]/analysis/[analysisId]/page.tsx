@@ -75,7 +75,7 @@ export default async function AnalysisPage({
                     <span className="text-muted-foreground text-sm font-medium">Files Scanned</span>
                     <div className="flex items-center gap-2 mt-2">
                         <Box className="h-5 w-5 text-blue-600" />
-                        <span className="text-2xl font-bold">5</span> {/* Placeholder as we didn't store file count */}
+                        <span className="text-2xl font-bold">-</span> {/* Placeholder as we didn't store file count */}
                     </div>
                 </div>
                 <div className="bg-card border rounded-lg p-4 flex flex-col justify-between">

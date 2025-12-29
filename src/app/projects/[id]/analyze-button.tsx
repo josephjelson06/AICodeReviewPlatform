@@ -20,8 +20,8 @@ export function AnalyzeButton({ projectId }: { projectId: string }) {
         },
         onSuccess: (data) => {
             router.refresh()
-            // Redirect to the new analysis
-            router.push(`/projects/${projectId}/analysis/${data.id}`)
+            // Redirect to the project root (dashboard style)
+            router.push(`/projects/${projectId}`)
         },
         onError: (err) => {
             alert("Failed to start analysis");

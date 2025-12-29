@@ -4,6 +4,9 @@ import { generateText } from "ai";
 import { createHash } from "crypto";
 import { z } from "zod";
 import { getModel } from "./ai-provider";
+// import { ASTAnalysisService } from "./ast-analysis";
+// import { DependencyAnalysisService } from "./dependency-analysis";
+import { VectorStore } from "./vector-store";
 
 const IssueSchema = z.object({
     issues: z.array(
@@ -14,6 +17,9 @@ const IssueSchema = z.object({
                 "PERFORMANCE",
                 "ARCHITECTURE",
                 "MAINTAINABILITY",
+                "BEST_PRACTICE",
+                "DEPENDENCY",
+                "TESTING"
             ]),
             lineNumber: z.number(),
             message: z.string(),
@@ -29,109 +35,199 @@ const IssueSchema = z.object({
 });
 
 export class AnalysisService {
+    // private astAnalysis = new ASTAnalysisService();
+    // private dependencyAnalysis = new DependencyAnalysisService();
+    private vectorStore = new VectorStore();
+
     /**
      * Orchestrates the analysis of a repository
      */
-    async analyzeRepository(
-        userId: string,
-        projectId: string,
-        accessToken: string
-    ) {
-        // 1. Get Project
-        const project = await db.project.findUnique({ where: { id: projectId } });
-        if (!project) throw new Error("Project not found");
-
-        // 2. Init GitHub
-        const github = new GitHubService(accessToken);
-
-        // 3. Create Analysis Record
+    /**
+     * Starts the analysis job (Async/Fire-and-Forget pattern)
+     * Returns the PENDING analysis record immediately.
+     */
+    async startAnalysis(userId: string, projectId: string, accessToken: string) {
+        // 1. Create Analysis Record
         const analysis = await db.analysis.create({
             data: { projectId, status: "PENDING" },
         });
 
+        // 2. Trigger Background Processing (Don't await this!)
+        this.processAnalysis(analysis.id, userId, projectId, accessToken).catch(err =>
+            console.error("Background Analysis Error:", err)
+        );
+
+        return analysis;
+    }
+
+    /**
+     * The heavy lifting function (runs in background)
+     */
+    private async processAnalysis(
+        analysisId: string,
+        userId: string,
+        projectId: string,
+        accessToken: string
+    ) {
         try {
-            // 4. Get Files
-            console.log(`Fetching file tree for ${project.owner}/${project.repo}...`);
+            // 1. Get Project
+            const project = await db.project.findUnique({ where: { id: projectId } });
+            if (!project) throw new Error("Project not found");
+
+            // 2. Init GitHub
+            const github = new GitHubService(accessToken);
+
+            // 3. Get Files
+            console.log(`[Job ${analysisId}] Fetching file tree for ${project.owner}/${project.repo}...`);
             const tree = await github.getFileTree(project.owner, project.repo);
 
             if (!tree || tree.length === 0) {
                 throw new Error("No files found or failed to fetch tree");
             }
 
-            // Filter for code files only (common extensions)
+            // Filter for code files only
             const codeFiles = tree.filter((f) =>
-                /\.(ts|tsx|js|jsx|py|java|go|rs|cpp|c|cs|rb|php)$/.test(f.path || "")
+                /\.(ts|tsx|js|jsx|py|java|go|rs|cpp|c|cs|rb|php|json|md)$/.test(f.path || "")
             );
 
-            console.log(`Found ${codeFiles.length} code files. Analyzing sample...`);
+            console.log(`[Job ${analysisId}] Found ${codeFiles.length} files. Analyzing...`);
 
-            // Limit to 5 files for prototype/demo to save tokens and time
-            const batch = codeFiles.slice(0, 5);
+            // Limit files
+            const batch = codeFiles.slice(0, 30);
             let totalIssues = 0;
 
-            for (const file of batch) {
-                if (!file.path) continue;
-                console.log(`Analyzing ${file.path}...`);
+            // Collect files for vector embedding
+            const filesToEmbed: { path: string, content: string }[] = [];
 
-                try {
-                    const content = await github.getFileContent(
-                        project.owner,
-                        project.repo,
-                        file.path
-                    );
+            const CONCURRENCY_LIMIT = 3;
+            const chunks = [];
+            for (let i = 0; i < batch.length; i += CONCURRENCY_LIMIT) {
+                chunks.push(batch.slice(i, i + CONCURRENCY_LIMIT));
+            }
 
-                    if (!content || content.length > 20000) {
-                        console.log(`Skipping ${file.path} (too large or empty)`);
-                        continue;
-                    }
+            for (const chunk of chunks) {
+                await Promise.all(chunk.map(async (file) => {
+                    if (!file.path) return;
+                    console.log(`[Job ${analysisId}] Analyzing ${file.path}...`);
 
-                    const issues = await this.analyzeCode(projectId, file.path, content);
+                    try {
+                        const content = await github.getFileContent(
+                            project.owner,
+                            project.repo,
+                            file.path
+                        );
 
-                    // Save issues
-                    for (const issue of issues) {
-                        totalIssues++;
-                        const issueRecord = await db.issue.create({
-                            data: {
-                                analysisId: analysis.id,
-                                filePath: file.path,
-                                severity: issue.severity,
-                                category: issue.category,
-                                lineNumber: issue.lineNumber || 0,
-                                message: issue.message,
-                                code: issue.code || "",
-                            },
-                        });
-
-                        if (issue.suggestion) {
-                            await db.suggestion.create({
-                                data: {
-                                    issueId: issueRecord.id,
-                                    diff: issue.suggestion.diff,
-                                    explanation: issue.suggestion.explanation || "No explanation provided",
-                                },
-                            });
+                        if (!content || content.length > 30000) {
+                            console.log(`Skipping ${file.path} (too large or empty)`);
+                            return;
                         }
+
+                        // Add to embedding list
+                        filesToEmbed.push({ path: file.path, content });
+
+                        let issues: any[] = [];
+
+                        if (file.path.endsWith("package.json")) {
+                            // issues = this.dependencyAnalysis.analyzePackageJson(content);
+                        } else {
+                            // 1. Static AST Scan (High Precision)
+                            // const staticIssues = this.astAnalysis.analyzeContent(file.path!, content);
+
+                            // 2. AI Scan (Deep Context)
+                            const aiIssues = await this.retryWithBackoff(() =>
+                                this.analyzeCode(projectId, file.path!, content)
+                            );
+                            issues = [...aiIssues];
+                        }
+
+                        // Save issues
+                        for (const issue of issues) {
+                            // Sanitize Issue Data (Prevent Prisma Crash)
+                            const safeSeverity = ["CRITICAL", "HIGH", "MEDIUM", "LOW"].includes(issue.severity)
+                                ? issue.severity
+                                : "LOW";
+
+                            const safeCategory = [
+                                "SECURITY", "PERFORMANCE", "ARCHITECTURE", "MAINTAINABILITY",
+                                "BEST_PRACTICE", "DEPENDENCY", "TESTING"
+                            ].includes(issue.category)
+                                ? issue.category
+                                : "BEST_PRACTICE"; // Default fallback
+
+                            const safeLineNumber = typeof issue.lineNumber === 'number' ? issue.lineNumber : 0;
+                            const safeMessage = issue.message || "Issue identified";
+
+                            totalIssues++;
+                            try {
+                                const issueRecord = await db.issue.create({
+                                    data: {
+                                        analysisId: analysisId,
+                                        filePath: file.path!,
+                                        severity: safeSeverity,
+                                        category: safeCategory,
+                                        lineNumber: safeLineNumber,
+                                        message: safeMessage,
+                                        code: issue.code || "",
+                                    },
+                                });
+
+                                if (issue.suggestion) {
+                                    await db.suggestion.create({
+                                        data: {
+                                            issueId: issueRecord.id,
+                                            diff: issue.suggestion.diff || "",
+                                            explanation: issue.suggestion.explanation || "No explanation provided",
+                                        },
+                                    });
+                                }
+                            } catch (insertError) {
+                                console.error(`Failed to insert issue for ${file.path}:`, insertError);
+                                // Continue to next issue instead of crashing job
+                            }
+                        }
+                    } catch (err) {
+                        console.error(`Failed to analyze ${file.path}:`, err);
                     }
-                } catch (err) {
-                    console.error(`Failed to analyze ${file.path}:`, err);
-                }
+                }));
+            }
+
+            // 5. Generate Embeddings (Background)
+            try {
+                console.log(`[Job ${analysisId}] Generating embeddings for ${filesToEmbed.length} files...`);
+                await this.vectorStore.addDocuments(projectId, filesToEmbed);
+                console.log(`[Job ${analysisId}] Embeddings generated.`);
+            } catch (error) {
+                console.error("Embedding generation failed:", error);
+                // Don't fail the whole analysis just for this
             }
 
             // 6. Complete
             await db.analysis.update({
-                where: { id: analysis.id },
-                data: { status: "COMPLETED", score: Math.max(0, 100 - (totalIssues * 5)) }, // Naive scoring logic
+                where: { id: analysisId },
+                data: { status: "COMPLETED", score: Math.max(0, 100 - (totalIssues * 2)) },
             });
-
-            return analysis;
+            console.log(`[Job ${analysisId}] Completed successfully.`);
 
         } catch (e) {
-            console.error("Analysis failed:", e);
+            console.error(`[Job ${analysisId}] Failed:`, e);
             await db.analysis.update({
-                where: { id: analysis.id },
+                where: { id: analysisId },
                 data: { status: "FAILED" },
             });
-            throw e;
+        }
+    }
+
+    /**
+     * Helper: Exponential Backoff for AI calls
+     */
+    async retryWithBackoff<T>(fn: () => Promise<T>, retries = 3, delay = 1000): Promise<T> {
+        try {
+            return await fn();
+        } catch (error) {
+            if (retries === 0) throw error;
+            console.warn(`Retrying operation... (${retries} attempts left)`);
+            await new Promise(res => setTimeout(res, delay));
+            return this.retryWithBackoff(fn, retries - 1, delay * 2);
         }
     }
 
@@ -157,44 +253,43 @@ export class AnalysisService {
                 }
             }
 
-            const systemPrompt = `You are an expert Senior Software Engineer and Code Reviewer. 
-            Analyze the provided code for critical issues including:
-            1. Security Vulnerabilities (Injection, Secrets, etc.)
-            2. Performance Bottlenecks (N+1 queries, expensive loops)
-            3. Architecture Flaws (bad patterns, spaghetti code)
-            4. Maintainability (Cognitive complexity)
+            const systemPrompt = `You are an expert Senior Software Engineer and Code Reviewer.
+            Your task is to provide a "CodeAnt" style deep technical analysis.
             
-            Be strict but constructive. 
+            Analyze the provided code for:
+            1. Security (Injection, Secrets, Auth flaws)
+            2. Performance (Big O complexity, Memory leaks)
+            3. Architecture (Coupling, Cohesion, Design Patterns)
+            4. Testing (Is this code testable? Missing edge cases?)
+            5. Best Practices (Naming, Types, Docstrings)
+
+            Be strict. If you see O(n^2), flag it. If you see code without types, flag it.
             
             IMPORTANT: Return the result ONLY as a raw JSON object matching this structure:
             {
               "issues": [
                 {
                   "severity": "CRITICAL" | "HIGH" | "MEDIUM" | "LOW",
-                  "category": "SECURITY" | "PERFORMANCE" | "ARCHITECTURE" | "MAINTAINABILITY",
+                  "category": "SECURITY" | "PERFORMANCE" | "ARCHITECTURE" | "MAINTAINABILITY" | "TESTING" | "BEST_PRACTICE",
                   "lineNumber": number,
-                  "message": "description of issue",
+                  "message": "Detailed technical explanation",
                   "code": "optional code snippet",
-                  "suggestion": { "diff": "diff string", "explanation": "string" } (optional)
+                  "suggestion": { "diff": "diff string", "explanation": "technical justification" } (optional)
                 }
               ]
             }
-            Do not include markdown formatting like \`\`\`json. Just the raw JSON string.`;
+            Do not include markdown. Just JSON.`;
 
             const userPrompt = `File: ${filePath}\n\nCode:\n${content}`;
 
             let rawText = "";
             const isProduction = process.env.NODE_ENV === "production";
-            // Check if we specifically want Ollama manual fetch (Local Env)
-            // If in production, even if AI_PROVIDER is "ollama", force Groq SDK (handled in getModel, but we must skip this block)
             const useManualOllama = !isProduction && process.env.AI_PROVIDER === "ollama";
 
             if (useManualOllama) {
-                // Use manual fetcher for Ollama
                 const { generateOllamaResponse } = await import("./ai-provider");
                 rawText = await generateOllamaResponse(systemPrompt, userPrompt);
             } else {
-                // Use SDK for others (Groq/OpenAI) + Production
                 const { text } = await generateText({
                     model: getModel(),
                     system: systemPrompt,
@@ -203,22 +298,25 @@ export class AnalysisService {
                 rawText = text;
             }
 
-            // Clean data (remove markdown code blocks if present)
             const cleanText = rawText.replace(/```json/g, "").replace(/```/g, "").trim();
 
             try {
                 const parsed = JSON.parse(cleanText);
                 const issues = parsed.issues || [];
 
-                // 2. Save to Cache
-                await db.fileCache.create({
-                    data: {
+                // 2. Save to Cache (Upsert to prevent race conditions)
+                await db.fileCache.upsert({
+                    where: {
+                        projectId_filePath_hash: { projectId, filePath, hash }
+                    },
+                    update: {}, // Already exists, do nothing
+                    create: {
                         projectId,
                         filePath,
                         hash,
                         issues: JSON.stringify(issues)
                     }
-                }).catch((e: any) => console.error("Failed to save cache:", e));
+                }).catch((e: any) => console.warn("Cache write skipped:", e.message));
 
                 return issues;
             } catch (e) {
@@ -227,7 +325,7 @@ export class AnalysisService {
             }
         } catch (error) {
             console.error("AI Generation failed:", error);
-            return [];
+            throw error;
         }
     }
 }

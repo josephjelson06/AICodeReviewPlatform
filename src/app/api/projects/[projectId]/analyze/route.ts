@@ -19,7 +19,7 @@ export async function POST(
     try {
         const analysisService = new AnalysisService();
         // We await this. In production, offload to a queue (Inngest/BullMQ).
-        const analysis = await analysisService.analyzeRepository(
+        const analysis = await analysisService.startAnalysis(
             session.user.id,
             projectId,
             session.accessToken

@@ -1,10 +1,12 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
 }
 
 model User {
@@ -20,18 +22,18 @@ model User {
 }
 
 model Account {
-  id                 String  @id @default(cuid())
-  userId             String
-  type               String
-  provider           String
-  providerAccountId  String
-  refresh_token      String? @db.Text
-  access_token       String? @db.Text
-  expires_at         Int?
-  token_type         String?
-  scope              String?
-  id_token           String? @db.Text
-  session_state      String?
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -39,49 +41,50 @@ model Account {
 }
 
 model Project {
-  id          String   @id @default(cuid())
-  name        String
-  owner       String
-  repo        String
-  url         String
-  userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  analyses    Analysis[]
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id        String      @id @default(cuid())
+  name      String
+  owner     String
+  repo      String
+  url       String
+  userId    String
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  analyses  Analysis[]
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+  Embedding Embedding[]
 
   @@unique([userId, owner, repo])
 }
 
 model Analysis {
-  id          String   @id @default(cuid())
-  projectId   String
-  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  status      String   // e.g. "COMPLETED", "FAILED", "PENDING"
-  score       Int?     // 0-100
-  issues      Issue[]
-  createdAt   DateTime @default(now())
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  status    String // e.g. "COMPLETED", "FAILED", "PENDING"
+  score     Int? // 0-100
+  issues    Issue[]
+  createdAt DateTime @default(now())
 }
 
 model Issue {
-  id          String   @id @default(cuid())
-  analysisId  String
-  analysis    Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
-  severity    String   // "CRITICAL", "HIGH", "MEDIUM", "LOW"
-  category    String   // "SECURITY", "PERFORMANCE", "ARCHITECTURE", "MAINTAINABILITY"
-  filePath    String
-  lineNumber  Int
-  message     String
-  code        String?  // problematic code snippet
-  suggestion  Suggestion?
-  createdAt   DateTime @default(now())
+  id         String      @id @default(cuid())
+  analysisId String
+  analysis   Analysis    @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  severity   String // "CRITICAL", "HIGH", "MEDIUM", "LOW"
+  category   String // "SECURITY", "PERFORMANCE", "ARCHITECTURE", "MAINTAINABILITY", "BEST_PRACTICE", "DEPENDENCY", "TESTING"
+  filePath   String
+  lineNumber Int
+  message    String
+  code       String? // problematic code snippet
+  suggestion Suggestion?
+  createdAt  DateTime    @default(now())
 }
 
 model Suggestion {
-  id        String @id @default(cuid())
-  issueId   String @unique
-  issue     Issue  @relation(fields: [issueId], references: [id], onDelete: Cascade)
-  diff      String // Suggested change (diff or new code)
+  id          String @id @default(cuid())
+  issueId     String @unique
+  issue       Issue  @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  diff        String // Suggested change (diff or new code)
   explanation String
 }
 
@@ -89,9 +92,23 @@ model FileCache {
   id        String   @id @default(cuid())
   projectId String
   filePath  String
-  hash      String   // SHA256 of the content
-  issues    String   // JSON string of issues
+  hash      String // SHA256 of the content
+  issues    String // JSON string of issues
   createdAt DateTime @default(now())
 
   @@unique([projectId, filePath, hash]) // Unique constraint for cache hit
+}
+
+model Embedding {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  fileName  String
+  content   String // The chunk of code
+  embedding Unsupported("vector")? // Generic vector type
+
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
 }

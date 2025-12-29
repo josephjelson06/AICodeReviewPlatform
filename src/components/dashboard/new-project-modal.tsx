@@ -1,5 +1,5 @@
 "use client"
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useMutation } from "@tanstack/react-query"
 import { useRouter } from "next/navigation"
 import { Plus } from "lucide-react"
@@ -19,7 +19,12 @@ import {
 export function NewProjectModal() {
     const [open, setOpen] = useState(false)
     const [url, setUrl] = useState("")
+    const [mounted, setMounted] = useState(false)
     const router = useRouter()
+
+    useEffect(() => {
+        setMounted(true)
+    }, [])
 
     const mutation = useMutation({
         mutationFn: async (url: string) => {
@@ -34,7 +39,6 @@ export function NewProjectModal() {
             setOpen(false)
             setUrl("")
             router.refresh()
-            // Optionally redirect to the new project
             router.push(`/projects/${data.id}`)
         },
         onError: (error) => {
@@ -46,6 +50,14 @@ export function NewProjectModal() {
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         mutation.mutate(url);
+    }
+
+    if (!mounted) {
+        return (
+            <Button variant="default">
+                <Plus className="mr-2 h-4 w-4" /> Add Repository
+            </Button>
+        )
     }
 
     return (

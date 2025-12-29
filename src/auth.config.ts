@@ -9,9 +9,7 @@ export default {
             authorization: { params: { scope: "read:user repo" } },
         }),
     ],
-    pages: {
-        signIn: "/login", // We will create this page later
-    },
+
     callbacks: {
         authorized({ auth, request: { nextUrl } }) {
             const isLoggedIn = !!auth?.user;
