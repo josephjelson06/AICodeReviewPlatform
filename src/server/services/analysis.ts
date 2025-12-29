@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { inngest } from "@/inngest/client";
 import { GitHubService } from "./github";
 import { generateText } from "ai";
 import { createHash } from "crypto";
@@ -47,15 +48,27 @@ export class AnalysisService {
      * Returns the PENDING analysis record immediately.
      */
     async startAnalysis(userId: string, projectId: string, accessToken: string) {
-        // 1. Create Analysis Record
+        // 1. Create Analysis Record (PENDING)
         const analysis = await db.analysis.create({
-            data: { projectId, status: "PENDING" },
+            data: {
+                projectId,
+                status: "PENDING",
+            },
         });
 
-        // 2. Trigger Background Processing (Don't await this!)
-        this.processAnalysis(analysis.id, userId, projectId, accessToken).catch(err =>
-            console.error("Background Analysis Error:", err)
-        );
+        // 2. Trigger Inngest Event (Background Job)
+        await inngest.send({
+            name: "analysis.start",
+            data: {
+                analysisId: analysis.id,
+                userId,
+                projectId,
+                accessToken
+            },
+        });
+
+        // REMOVED: this.processAnalysis(...) manual call.
+        // We rely 100% on Inngest now.
 
         return analysis;
     }

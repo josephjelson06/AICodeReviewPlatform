@@ -209,8 +209,17 @@ export const analyzeRepository = inngest.createFunction(
         await step.run("update-status", async () => {
             const { CRITICAL, HIGH, MEDIUM, LOW } = analysisResults.severityCounts;
             // Weighted deduction
-            const deduction = (CRITICAL * 10) + (HIGH * 5) + (MEDIUM * 2) + (LOW * 1);
-            const finalScore = Math.max(0, 100 - deduction);
+            // Weighted deduction (Adjusted to be less harsh)
+            const deduction = (CRITICAL * 5) + (HIGH * 3) + (MEDIUM * 1) + (LOW * 0.1);
+            const finalScore = Math.max(0, Math.round(100 - deduction));
+
+            console.log(`[Job ${analysisId}] Score Calculation Breakdown:`);
+            console.log(`- Critical: ${CRITICAL} x 10 = -${CRITICAL * 10}`);
+            console.log(`- High:     ${HIGH} x 5 = -${HIGH * 5}`);
+            console.log(`- Medium:   ${MEDIUM} x 2 = -${MEDIUM * 2}`);
+            console.log(`- Low:      ${LOW} x 1 = -${LOW * 1}`);
+            console.log(`- Total Deduction: ${deduction}`);
+            console.log(`- Final Score: ${finalScore} (Floor 0)`);
 
             await db.analysis.update({
                 where: { id: analysisId },
