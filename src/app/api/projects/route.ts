@@ -31,6 +31,21 @@ export async function POST(req: Request) {
         const github = new GitHubService(session.accessToken);
         const repoDetails = await github.getRepository(owner, repo);
 
+        // Check if project already exists
+        const existingProject = await db.project.findUnique({
+            where: {
+                userId_owner_repo: {
+                    userId: session.user.id,
+                    owner: repoDetails.owner.login,
+                    repo: repoDetails.name,
+                }
+            }
+        });
+
+        if (existingProject) {
+            return NextResponse.json(existingProject);
+        }
+
         // Create Project
         const project = await db.project.create({
             data: {
@@ -45,7 +60,10 @@ export async function POST(req: Request) {
         return NextResponse.json(project);
 
     } catch (error) {
-        console.error("Project creation error:", error);
+        console.error("Project creation error details:", error);
+        if (error instanceof z.ZodError) {
+            return new NextResponse("Invalid request data", { status: 400 });
+        }
         return new NextResponse("Internal Error", { status: 500 });
     }
 }

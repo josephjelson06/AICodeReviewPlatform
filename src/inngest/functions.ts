@@ -47,7 +47,12 @@ export const analyzeRepository = inngest.createFunction(
         // to avoid thousands of step calls for a single repo.
         const analysisResults = await step.run("analyze-files", async () => {
             const github = new GitHubService(accessToken);
-            let localIssuesCount = 0;
+            let severityCounts = {
+                CRITICAL: 0,
+                HIGH: 0,
+                MEDIUM: 0,
+                LOW: 0,
+            };
 
             // Helper function for AI analysis (internal to this step)
             const analyzeCode = async (projectId: string, filePath: string, content: string) => {
@@ -156,6 +161,11 @@ export const analyzeRepository = inngest.createFunction(
                         const safeSeverity = ["CRITICAL", "HIGH", "MEDIUM", "LOW"].includes(issue.severity) ? issue.severity : "LOW";
                         const safeCategory = ["SECURITY", "PERFORMANCE", "ARCHITECTURE", "MAINTAINABILITY", "BEST_PRACTICE", "DEPENDENCY", "TESTING"].includes(issue.category) ? issue.category : "BEST_PRACTICE";
 
+                        if (safeSeverity === "CRITICAL") severityCounts.CRITICAL++;
+                        if (safeSeverity === "HIGH") severityCounts.HIGH++;
+                        if (safeSeverity === "MEDIUM") severityCounts.MEDIUM++;
+                        if (safeSeverity === "LOW") severityCounts.LOW++;
+
                         await db.issue.create({
                             data: {
                                 analysisId,
@@ -173,24 +183,19 @@ export const analyzeRepository = inngest.createFunction(
                                 } : undefined
                             }
                         });
-                        localIssuesCount++;
                     }
 
                 } catch (err) {
                     console.error(`Error processing file ${file.path}:`, err);
                 }
             }
-            return { processedCount: codeFiles.length, issuesFound: localIssuesCount, filesToEmbed };
+            return { processedCount: codeFiles.length, severityCounts, filesToEmbed };
         });
-
-        totalIssues = analysisResults.issuesFound;
 
         // 3. Generate Embeddings
         await step.run("generate-embeddings", async () => {
             try {
                 // Recover filesToEmbed from the previous step result
-                // Note: step.run return values are JSON serializable. 
-                // The 'analysisResults.filesToEmbed' comes from the return of the previous step.
                 const files = analysisResults.filesToEmbed;
                 console.log(`[Job ${analysisId}] Generating embeddings for ${files.length} files...`);
                 await vectorStore.addDocuments(projectId, files);
@@ -202,9 +207,14 @@ export const analyzeRepository = inngest.createFunction(
 
         // 4. Update Final Status
         await step.run("update-status", async () => {
+            const { CRITICAL, HIGH, MEDIUM, LOW } = analysisResults.severityCounts;
+            // Weighted deduction
+            const deduction = (CRITICAL * 10) + (HIGH * 5) + (MEDIUM * 2) + (LOW * 1);
+            const finalScore = Math.max(0, 100 - deduction);
+
             await db.analysis.update({
                 where: { id: analysisId },
-                data: { status: "COMPLETED", score: Math.max(0, 100 - (totalIssues * 2)) },
+                data: { status: "COMPLETED", score: finalScore },
             });
         });
 
