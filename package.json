@@ -21,6 +21,8 @@
     "@radix-ui/react-slot": "^1.2.4",
     "@tanstack/react-query": "^5.90.12",
     "@types/dagre": "^0.7.53",
+    "@upstash/ratelimit": "^2.0.7",
+    "@upstash/redis": "^1.36.0",
     "ai": "^5.0.116",
     "clsx": "^2.1.1",
     "dagre": "^0.8.5",
