@@ -4,7 +4,7 @@ import { auth } from "@/auth";
 
 export async function GET(
     request: Request,
-    { params }: { params: Promise<{ id: string; analysisId: string }> }
+    { params }: { params: Promise<{ analysisId: string }> }
 ) {
     const session = await auth();
     if (!session) return new NextResponse("Unauthorized", { status: 401 });
